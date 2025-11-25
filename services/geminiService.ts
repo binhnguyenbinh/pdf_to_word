@@ -2,53 +2,104 @@ import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
 import { PageData } from "../types";
 
 // Initialize Gemini Client
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
+
+/**
+ * Detects orientation based on content analysis
+ */
+export const detectOrientation = async (base64: string): Promise<'portrait' | 'landscape'> => {
+  try {
+    if (!process.env.GEMINI_API_KEY) {
+      throw new Error('GEMINI_API_KEY không được cấu hình');
+    }
+    
+    const response: GenerateContentResponse = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      config: { temperature: 0.1 },
+      contents: {
+        parts: [
+          {
+            inlineData: {
+              mimeType: "image/jpeg",
+              data: base64
+            }
+          },
+          {
+            text: "Phân tích hình ảnh này. Nếu nội dung chính rộng hơn cao (nhiều ký tự trên một dòng, bảng rộng), trả về 'landscape'. Nếu nội dung chính cao hơn rộng, trả về 'portrait'. Chỉ trả về một từ: landscape hoặc portrait"
+          }
+        ]
+      }
+    });
+
+    const result = response.text?.toLowerCase().trim() || 'portrait';
+    return result.includes('landscape') ? 'landscape' : 'portrait';
+  } catch (error) {
+    console.error('Orientation detection error:', error);
+    return 'portrait';
+  }
+};
 
 /**
  * Sends a PDF page image to Gemini to OCR and reformat according to VN standards.
  */
 export const processPage = async (pageData: PageData, totalPages: number): Promise<string> => {
   const model = "gemini-2.5-flash";
-  const { pageIndex, orientation, base64 } = pageData;
+  const { pageIndex, base64 } = pageData;
 
-  const orientationText = orientation === 'landscape' ? 'KHỔ GIẤY NGANG (LANDSCAPE)' : 'KHỔ GIẤY DỌC (PORTRAIT)';
+  // Detect orientation from content
+  const detectedOrientation = await detectOrientation(base64);
+  const orientationText = detectedOrientation === 'landscape' ? 'NGANG' : 'DỌC';
 
-  // Detailed prompts for Decree 30/2020/ND-CP
   const systemInstruction = `
-    Bạn là chuyên gia soạn thảo và số hóa văn bản hành chính Việt Nam (theo Nghị định 30/2020/NĐ-CP).
+    Bạn là chuyên gia số hóa văn bản hành chính Việt Nam theo Nghị định 30/2020/NĐ-CP.
     
-    NHIỆM VỤ: 
-    Chuyển đổi hình ảnh văn bản ${orientationText} thành mã HTML.
+    NHIỆM VỤ: Chuyển đổi hình ảnh thành HTML với MEASUREMENTS CHÍNH XÁC.
     
-    NGUYÊN TẮC CỐT LÕI:
-    1. TRUNG THỰC TUYỆT ĐỐI VỚI BỐ CỤC GỐC: 
-       - Nếu văn bản có bảng biểu (Table), HÃY TẠO HTML TABLE tương ứng. Đừng chuyển thành văn bản thường.
-       - Giữ nguyên số cột, số dòng.
-       - Nếu văn bản chia cột (ví dụ phần Nơi nhận), hãy dùng Table ẩn viền (border: none) để chia cột.
+    QUY TẮC HTML OUTPUT:
+    1. KHÔNG dùng <html>, <head>, <body> - CHỈ trả về nội dung HTML
+    2. SỬ DỤNG INLINE CSS với measurements CHÍNH XÁC
+    3. Font: font-family: 'Times New Roman', serif;
+    4. Font size: font-size: 14pt; (nội dung chính), 13pt (số trang, chú thích)
+    5. Line height: line-height: 1.5;
+    6. Text align: text-align: justify; (văn bản thường)
+    7. Margins: margin-top: 6pt; margin-bottom: 6pt; (cho mỗi đoạn)
     
-    2. ĐỊNH DẠNG THEO NGHỊ ĐỊNH 30:
-       - Font: Times New Roman.
-       - Căn lề: Justify cho văn bản thường.
-       - Line-height: 1.5.
+    CẤU TRÚC:
+    - Mỗi đoạn văn: <p style="font-family: 'Times New Roman', serif; font-size: 14pt; line-height: 1.5; text-align: justify; margin: 6pt 0;">Nội dung</p>
+    - Tiêu đề: <p style="font-family: 'Times New Roman', serif; font-size: 16pt; font-weight: bold; text-align: center; margin: 12pt 0;">Tiêu đề</p>
+    - Bảng: <table style="width: 100%; border-collapse: collapse; margin: 12pt 0;">
+              <tr><td style="border: 1px solid black; padding: 5pt; font-family: 'Times New Roman', serif; font-size: 14pt;">Nội dung</td></tr>
+            </table>
+    - Căn trái: text-align: left;
+    - Căn giữa: text-align: center;
+    - Căn phải: text-align: right;
+    - In đậm: font-weight: bold;
+    - In nghiêng: font-style: italic;
+    - Gạch chân: text-decoration: underline;
     
-    3. XỬ LÝ SỐ TRANG:
-       - Nếu thấy số trang trên hình ảnh, hãy đặt nó vào một thẻ <div> riêng ở vị trí tương ứng (thường là đầu trang hoặc giữa cuối trang).
-       - Style cho số trang: font-size: 13px; text-align: center; margin-top: 10px; margin-bottom: 10px;
+    BỎ:
+    - Chữ viết tay
+    - Dấu đóng công văn
+    - Ghi chú lề
     
-    YÊU CẦU KỸ THUẬT HTML:
-    - KHÔNG dùng thẻ <html>, <head>, <body>. Chỉ trả về nội dung bên trong body.
-    - Dùng Inline CSS.
-    - Đối với bảng biểu (Table): width="100%", border-collapse="collapse".
-    - Đối với Quốc hiệu/Tiêu ngữ (nếu trang 1): Dùng Table 2 cột, border: none. Cột trái: Cơ quan chủ quản (in hoa), Cơ quan ban hành (in hoa đậm). Cột phải: Quốc hiệu (in hoa đậm), Tiêu ngữ (in thường đậm, gạch chân).
-    - KHÔNG thêm bất kỳ lời dẫn nào ngoài HTML.
+    GIỮ NGUYÊN:
+    - Vị trí chính xác của text
+    - Khoảng cách giữa các đoạn
+    - Bảng biểu với border
+    - Căn lề chính xác
+    - Font size chính xác
   `;
 
   try {
+    if (!process.env.GEMINI_API_KEY) {
+      throw new Error('GEMINI_API_KEY không được cấu hình');
+    }
+    
     const response: GenerateContentResponse = await ai.models.generateContent({
       model: model,
       config: {
         systemInstruction: systemInstruction,
-        temperature: 0.1, // Low temperature for higher fidelity
+        temperature: 0.1,
       },
       contents: {
         parts: [
@@ -59,13 +110,23 @@ export const processPage = async (pageData: PageData, totalPages: number): Promi
             }
           },
           {
-            text: `Đây là trang ${pageIndex} trên tổng số ${totalPages} trang. Chiều trang: ${orientationText}. Hãy chuyển đổi sang HTML giữ nguyên bố cục bảng biểu và nội dung.`
+            text: `Trang ${pageIndex}/${totalPages}. Orientation: ${orientationText}. 
+            
+Chuyển đổi sang HTML với inline CSS chính xác. 
+Mỗi element phải có style inline đầy đủ: font-family, font-size, line-height, text-align, margin.
+Bảng phải có border: 1px solid black và padding: 5pt.
+Giữ nguyên 100% layout và vị trí.`
           }
         ]
       }
     });
 
-    return response.text || "";
+    let html = response.text || "";
+    
+    // Clean up markdown code blocks if present
+    html = html.replace(/```html\n?/g, '').replace(/```\n?/g, '');
+    
+    return html.trim();
   } catch (error) {
     console.error(`Gemini API Error at page ${pageIndex}:`, error);
     throw new Error(`Lỗi xử lý trang ${pageIndex}.`);

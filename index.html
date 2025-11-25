@@ -12,10 +12,10 @@
           extend: {
             fontFamily: {
               sans: ['Inter', 'sans-serif'],
-              serif: ['Times New Roman', 'serif'], // Important for VN documents
+              serif: ['Times New Roman', 'serif'],
             },
             colors: {
-              primary: '#0057B7', // Professional Blue
+              primary: '#0057B7',
               secondary: '#FFCD00',
             }
           },
@@ -23,7 +23,6 @@
       }
     </script>
     <style>
-      /* Custom scrollbar for cleaner look */
       ::-webkit-scrollbar {
         width: 8px;
         height: 8px;
@@ -38,11 +37,10 @@
       ::-webkit-scrollbar-thumb:hover {
         background: #a8a8a8;
       }
-      /* A4 Paper simulation */
       .a4-paper {
         width: 210mm;
         min-height: 297mm;
-        padding: 20mm 15mm 20mm 20mm; /* Standard margins usually: top 20, bottom 20, left 30, right 15 - adjusting for screen */
+        padding: 20mm 15mm 20mm 20mm;
         background: white;
         box-shadow: 0 0 10px rgba(0,0,0,0.1);
         margin: 0 auto;
@@ -57,20 +55,9 @@
         .a4-paper { box-shadow: none; margin: 0; width: 100%; }
       }
     </style>
-  <script type="importmap">
-{
-  "imports": {
-    "react/": "https://aistudiocdn.com/react@^19.2.0/",
-    "react": "https://aistudiocdn.com/react@^19.2.0",
-    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.30.0",
-    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.554.0",
-    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
-    "pdfjs-dist": "https://esm.sh/pdfjs-dist@3.11.174"
-  }
-}
-</script>
-</head>
+  </head>
   <body class="bg-gray-50 text-slate-800">
     <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
   </body>
 </html>

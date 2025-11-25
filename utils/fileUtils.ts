@@ -1,4 +1,5 @@
 import * as pdfjsLib from 'pdfjs-dist';
+import JSZip from 'jszip';
 import { PageData, PageOrientation } from '../types';
 
 // Fix for ESM import of pdfjs-dist where exports might be on .default
@@ -6,7 +7,6 @@ const pdfjs = (pdfjsLib as any).default ?? pdfjsLib;
 
 // Configure the worker
 if (pdfjs.GlobalWorkerOptions) {
-  // Use cdnjs for the worker to avoid importScripts errors with esm.sh redirects/headers
   pdfjs.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 }
 
@@ -16,7 +16,6 @@ export const fileToBase64 = (file: File): Promise<string> => {
     reader.readAsDataURL(file);
     reader.onload = () => {
       const result = reader.result as string;
-      // Remove Data URL prefix (e.g., "data:application/pdf;base64,")
       const base64 = result.split(',')[1];
       resolve(base64);
     };
@@ -24,13 +23,9 @@ export const fileToBase64 = (file: File): Promise<string> => {
   });
 };
 
-/**
- * Converts a PDF file into an array of PageData objects containing image and dimension info.
- */
 export const convertPdfToImages = async (file: File): Promise<PageData[]> => {
   const arrayBuffer = await file.arrayBuffer();
   
-  // Loading the document using the resolved pdfjs object
   const loadingTask = pdfjs.getDocument({ data: arrayBuffer });
   const pdf = await loadingTask.promise;
   
@@ -40,11 +35,8 @@ export const convertPdfToImages = async (file: File): Promise<PageData[]> => {
   for (let i = 1; i <= totalPages; i++) {
     const page = await pdf.getPage(i);
     
-    // Set scale to 2.0 for higher resolution (better OCR)
-    // We check the viewport to determine orientation
     const viewport = page.getViewport({ scale: 2.0 });
     
-    // Determine orientation based on dimensions
     const isLandscape = viewport.width > viewport.height;
     const orientation: PageOrientation = isLandscape ? 'landscape' : 'portrait';
 
@@ -65,9 +57,7 @@ export const convertPdfToImages = async (file: File): Promise<PageData[]> => {
 
     await page.render(renderContext).promise;
     
-    // Export to JPEG base64
     const base64Url = canvas.toDataURL('image/jpeg', 0.85);
-    // Remove "data:image/jpeg;base64," prefix
     const base64 = base64Url.split(',')[1];
     
     pages.push({
@@ -82,81 +72,200 @@ export const convertPdfToImages = async (file: File): Promise<PageData[]> => {
   return pages;
 };
 
-export const exportToWord = (pages: PageData[], fileName: string) => {
-  // To handle mixed orientation in Word (Portrait/Landscape), we need to use MSO styles
-  // and explicit Section Breaks.
+function escapeXml(str: string): string {
+  return str.replace(/[<>&'"]/g, (c) => {
+    switch (c) {
+      case '<': return '&lt;';
+      case '>': return '&gt;';
+      case '&': return '&amp;';
+      case "'": return '&apos;';
+      case '"': return '&quot;';
+      default: return c;
+    }
+  });
+}
+
+function parseStyle(styleStr: string): Record<string, string> {
+  const styles: Record<string, string> = {};
+  if (!styleStr) return styles;
   
-  let bodyContent = '';
+  styleStr.split(';').forEach(rule => {
+    const [key, value] = rule.split(':').map(s => s.trim());
+    if (key && value) {
+      styles[key] = value;
+    }
+  });
+  return styles;
+}
+
+function ptToTwips(pt: string): number {
+  const num = parseFloat(pt);
+  return Math.round(num * 20); // 1pt = 20 twips
+}
+
+function getAlignment(align: string): string {
+  switch (align) {
+    case 'center': return 'center';
+    case 'right': return 'right';
+    case 'justify': return 'both';
+    default: return 'left';
+  }
+}
+
+function htmlToWordXml(html: string): string {
+  let xml = '';
+  const tempDiv = document.createElement('div');
+  tempDiv.innerHTML = html;
+
+  function processElement(elem: HTMLElement): string {
+    let result = '';
+    const styles = parseStyle(elem.getAttribute('style') || '');
+    
+    if (elem.tagName === 'TABLE') {
+      result += htmlTableToWordXml(elem as HTMLTableElement);
+    } else if (elem.tagName === 'P') {
+      const textAlign = styles['text-align'] || 'left';
+      const fontSize = styles['font-size'] || '14pt';
+      const fontWeight = styles['font-weight'] || 'normal';
+      const fontStyle = styles['font-style'] || 'normal';
+      const textDecoration = styles['text-decoration'] || 'none';
+      const marginTop = styles['margin-top'] || styles['margin'] || '6pt';
+      const marginBottom = styles['margin-bottom'] || styles['margin'] || '6pt';
+      
+      const szVal = Math.round(parseFloat(fontSize) * 2); // pt to half-points
+      const spacingBefore = ptToTwips(marginTop.replace('pt', ''));
+      const spacingAfter = ptToTwips(marginBottom.replace('pt', ''));
+      
+      let rPr = `<w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="${szVal}"/>`;
+      if (fontWeight === 'bold') rPr += '<w:b/>';
+      if (fontStyle === 'italic') rPr += '<w:i/>';
+      if (textDecoration.includes('underline')) rPr += '<w:u w:val="single"/>';
+      
+      const text = elem.textContent || '';
+      if (text.trim()) {
+        result += `<w:p><w:pPr><w:jc w:val="${getAlignment(textAlign)}"/><w:spacing w:before="${spacingBefore}" w:after="${spacingAfter}" w:line="360" w:lineRule="auto"/></w:pPr><w:r><w:rPr>${rPr}</w:rPr><w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r></w:p>`;
+      }
+    } else if (elem.tagName === 'DIV') {
+      elem.childNodes.forEach((child) => {
+        if (child.nodeType === Node.ELEMENT_NODE) {
+          result += processElement(child as HTMLElement);
+        }
+      });
+    } else if (elem.tagName === 'BR') {
+      result += '<w:p/>';
+    }
+    
+    return result;
+  }
+
+  tempDiv.childNodes.forEach((node) => {
+    if (node.nodeType === Node.ELEMENT_NODE) {
+      xml += processElement(node as HTMLElement);
+    }
+  });
+
+  return xml;
+}
+
+function htmlTableToWordXml(table: HTMLTableElement): string {
+  let xml = '<w:tbl><w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:tblBorders><w:top w:val="single" w:sz="12" w:space="0" w:color="000000"/><w:left w:val="single" w:sz="12" w:space="0" w:color="000000"/><w:bottom w:val="single" w:sz="12" w:space="0" w:color="000000"/><w:right w:val="single" w:sz="12" w:space="0" w:color="000000"/><w:insideH w:val="single" w:sz="12" w:space="0" w:color="000000"/><w:insideV w:val="single" w:sz="12" w:space="0" w:color="000000"/></w:tblBorders></w:tblPr>';
+  
+  const rows = table.querySelectorAll('tr');
+  rows.forEach((row) => {
+    xml += '<w:tr>';
+    const cells = row.querySelectorAll('td, th');
+    cells.forEach((cell) => {
+      const cellElem = cell as HTMLElement;
+      const styles = parseStyle(cellElem.getAttribute('style') || '');
+      const fontSize = styles['font-size'] || '14pt';
+      const szVal = Math.round(parseFloat(fontSize) * 2);
+      
+      xml += `<w:tc><w:tcPr><w:tcW w:w="2000" w:type="dxa"/><w:tcBorders><w:top w:val="single" w:sz="12"/><w:left w:val="single" w:sz="12"/><w:bottom w:val="single" w:sz="12"/><w:right w:val="single" w:sz="12"/></w:tcBorders></w:tcPr><w:p><w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="${szVal}"/></w:rPr><w:t>${escapeXml(cell.textContent || '')}</w:t></w:r></w:p></w:tc>`;
+    });
+    xml += '</w:tr>';
+  });
+  
+  xml += '</w:tbl>';
+  return xml;
+}
+
+export const exportToDocx = async (pages: PageData[], fileName: string) => {
+  const zip = new JSZip();
+
+  zip.file('[Content_Types].xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+</Types>`);
+
+  zip.file('_rels/.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>`);
+
+  zip.file('word/styles.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:docDefaults>
+    <w:rPrDefault>
+      <w:rPr>
+        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/>
+        <w:sz w:val="28"/>
+      </w:rPr>
+    </w:rPrDefault>
+  </w:docDefaults>
+  <w:style w:type="paragraph" w:default="1" w:styleId="Normal">
+    <w:name w:val="Normal"/>
+    <w:pPr>
+      <w:spacing w:line="360" w:lineRule="auto"/>
+    </w:pPr>
+  </w:style>
+</w:styles>`);
+
+  let documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>`;
 
   pages.forEach((page, index) => {
-    // Determine margins based on Decree 30/2020/ND-CP roughly
-    // Portrait: Top 2cm, Bottom 2cm, Left 3cm, Right 1.5cm
-    // Landscape: Top 2cm, Bottom 2cm, Left 2cm, Right 2cm (simplified)
-    const marginStyle = page.orientation === 'landscape' 
-      ? 'margin: 2.0cm 2.0cm 2.0cm 2.0cm; size: 29.7cm 21.0cm; mso-page-orientation: landscape;' 
-      : 'margin: 2.0cm 2.0cm 2.0cm 3.0cm; size: 21.0cm 29.7cm; mso-page-orientation: portrait;';
+    const isLandscape = page.orientation === 'landscape';
+    const margins = isLandscape 
+      ? { top: 1440, bottom: 1440, left: 1440, right: 1440 }
+      : { top: 1440, bottom: 1440, left: 1728, right: 864 };
 
-    // Add Section Break for Word (except potentially the first one, but doing it for all ensures style application)
-    // The <br clear=all ...> is the magic trick for Word section breaks
     if (index > 0) {
-      bodyContent += `
-        <br clear=all style='mso-special-character:line-break; page-break-before:always'>
-      `;
+      documentXml += `<w:p><w:pPr><w:pageBreakBefore/></w:pPr></w:p>`;
     }
 
-    bodyContent += `
-      <div class=Section${index + 1} style='${marginStyle}'>
-        ${page.processedHtml || ''}
-      </div>
-    `;
+    const pageXml = htmlToWordXml(page.processedHtml || '');
+    documentXml += pageXml;
+
+    if (index === pages.length - 1) {
+      documentXml += `<w:sectPr>
+        <w:pgSz w:w="${isLandscape ? '15840' : '12240'}" w:h="${isLandscape ? '12240' : '15840'}" w:orient="${isLandscape ? 'landscape' : 'portrait'}"/>
+        <w:pgMar w:top="${margins.top}" w:bottom="${margins.bottom}" w:left="${margins.left}" w:right="${margins.right}"/>
+      </w:sectPr>`;
+    }
   });
 
-  // Generate CSS for sections
-  let cssStyle = `
-    <style>
-      body { font-family: 'Times New Roman', serif; font-size: 14pt; }
-      p { margin-top: 6pt; margin-bottom: 6pt; text-align: justify; }
-      table { border-collapse: collapse; width: 100%; }
-      td, th { border: 1px solid black; padding: 5px; vertical-align: top; }
-      .no-border td { border: none !important; }
-      @page { mso-page-orientation: portrait; }
-      ${pages.map((p, i) => `
-        @page Section${i + 1} {
-          size: ${p.orientation === 'landscape' ? '29.7cm 21.0cm' : '21.0cm 29.7cm'};
-          margin: ${p.orientation === 'landscape' ? '2.0cm 2.0cm 2.0cm 2.0cm' : '2.0cm 2.0cm 2.0cm 3.0cm'};
-          mso-header-margin: 35.4pt; 
-          mso-footer-margin: 35.4pt; 
-          mso-paper-source:0;
-        }
-        div.Section${i + 1} { page: Section${i + 1}; }
-      `).join('')}
-    </style>
-  `;
+  documentXml += `
+  </w:body>
+</w:document>`;
 
-  const header = `
-    <html xmlns:o='urn:schemas-microsoft-com:office:office' 
-          xmlns:w='urn:schemas-microsoft-com:office:word' 
-          xmlns='http://www.w3.org/TR/REC-html40'>
-    <head>
-      <meta charset='utf-8'>
-      <title>DocFormat VN Export</title>
-      ${cssStyle}
-    </head>
-    <body>
-  `;
-  
-  const footer = `</body></html>`;
-  const sourceHTML = header + bodyContent + footer;
+  zip.file('word/document.xml', documentXml);
 
-  const blob = new Blob(['\ufeff', sourceHTML], {
-    type: 'application/msword'
-  });
-  
+  zip.file('word/_rels/document.xml.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>`);
+
+  const blob = await zip.generateAsync({ type: 'blob' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = `${fileName.replace(/\.[^/.]+$/, "")}_formatted.doc`;
+  link.download = `${fileName.replace(/\.[^/.]+$/, "")}_formatted.docx`;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
+  URL.revokeObjectURL(url);
 };
