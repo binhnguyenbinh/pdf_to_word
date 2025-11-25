@@ -4,57 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>DocFormat VN - Chuẩn hóa văn bản hành chính</title>
-    <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <script>
-      tailwind.config = {
-        theme: {
-          extend: {
-            fontFamily: {
-              sans: ['Inter', 'sans-serif'],
-              serif: ['Times New Roman', 'serif'],
-            },
-            colors: {
-              primary: '#0057B7',
-              secondary: '#FFCD00',
-            }
-          },
-        },
-      }
-    </script>
-    <style>
-      ::-webkit-scrollbar {
-        width: 8px;
-        height: 8px;
-      }
-      ::-webkit-scrollbar-track {
-        background: #f1f1f1;
-      }
-      ::-webkit-scrollbar-thumb {
-        background: #c1c1c1;
-        border-radius: 4px;
-      }
-      ::-webkit-scrollbar-thumb:hover {
-        background: #a8a8a8;
-      }
-      .a4-paper {
-        width: 210mm;
-        min-height: 297mm;
-        padding: 20mm 15mm 20mm 20mm;
-        background: white;
-        box-shadow: 0 0 10px rgba(0,0,0,0.1);
-        margin: 0 auto;
-        font-family: 'Times New Roman', serif;
-        font-size: 14pt;
-        line-height: 1.5;
-        color: black;
-      }
-      @media print {
-        body { background: white; }
-        .no-print { display: none; }
-        .a4-paper { box-shadow: none; margin: 0; width: 100%; }
-      }
-    </style>
   </head>
   <body class="bg-gray-50 text-slate-800">
     <div id="root"></div>
