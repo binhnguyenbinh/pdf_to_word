@@ -1,0 +1,5 @@
+{
+  "name": "DocFormat VN - Chuyển đổi PDF sang Văn bản Hành chính",
+  "description": "Ứng dụng tự động OCR và chuẩn hóa định dạng văn bản theo quy chuẩn hành chính Việt Nam (Nghị định 30/2020/NĐ-CP) sử dụng Google Gemini.",
+  "requestFramePermissions": []
+}
